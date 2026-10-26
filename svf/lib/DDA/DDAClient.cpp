@@ -54,7 +54,8 @@ void DDAClient::answerQueries(PointerAnalysis* pta)
 
     collectCandidateQueries(pta->getPAG());
 
-    u32_t count = 0;
+    // Only read inside DBOUT, which is compiled out in release builds.
+    [[maybe_unused]] u32_t count = 0;
     for (OrderedNodeSet::iterator nIter = candidateQueries.begin();
             nIter != candidateQueries.end(); ++nIter,++count)
     {
