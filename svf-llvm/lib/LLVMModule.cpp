@@ -158,15 +158,16 @@ void LLVMModuleSet::createSVFDataStructure()
     std::vector<const Function*> candidateDefs, candidateDecls;
     for (Module& mod : modules)
     {
-        std::vector<Function*> removedFuncList;
         /// Function
+        /// raw2fat: unused extapi.bc functions and globals are kept, as in
+        /// upstream SVF since #1538. The pruning that used to run here judged a
+        /// global unused when its users had no uses of their own, so it erased
+        /// globals still referenced by instructions such as `ret` (an LLVM
+        /// assertion) and globals that buildGlobalDefToRepMap had already
+        /// chosen as the representative of an application declaration.
         for (Function& func : mod.functions())
         {
-            if (isCalledExtFunction(&func))
-            {
-                removedFuncList.push_back(&func);
-            }
-            else if (func.isDeclaration())
+            if (func.isDeclaration())
             {
                 candidateDecls.push_back(&func);
             }
@@ -175,8 +176,6 @@ void LLVMModuleSet::createSVFDataStructure()
                 candidateDefs.push_back(&func);
             }
         }
-        /// Remove unused functions, annotations and global variables in extapi.bc
-        LLVMUtil::removeUnusedFuncsAndAnnotationsAndGlobalVariables(removedFuncList);
     }
     for (const Function* func: candidateDefs)
     {
