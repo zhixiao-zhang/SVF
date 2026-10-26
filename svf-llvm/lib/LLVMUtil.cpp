@@ -1013,7 +1013,16 @@ bool LLVMUtil::isVirtualCallSite(const CallBase* cs)
             const Value* vtbl = vfuncptrgepinst->getPointerOperand();
             if (SVFUtil::isa<LoadInst>(vtbl))
             {
-                return true;
+                /// raw2fat: C calls through function-pointer arrays, such
+                /// as x264's w->weightfn[i](dst, ...), match the pattern
+                /// too. Virtual calls are resolved through the class
+                /// hierarchy only, which has no targets in C, so such calls
+                /// lost their points-to targets and parameter edges. Only a
+                /// module with a C++ virtual table can make virtual calls.
+                for (const GlobalVariable& gv : cs->getModule()->globals())
+                    if (gv.getName().startswith("_ZTV"))
+                        return true;
+                return false;
             }
         }
     }
