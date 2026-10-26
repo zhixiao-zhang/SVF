@@ -40,6 +40,8 @@
 #include "SVF-LLVM/CHGBuilder.h"
 #include "SVFIR/SVFFileSystem.h"
 #include "SVF-LLVM/SymbolTableBuilder.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/Support/ErrorHandling.h"
 
 
 using namespace std;
@@ -858,6 +860,84 @@ void SVFIRBuilder::visitInvokeInst(InvokeInst &i)
 void SVFIRBuilder::visitCallBrInst(CallBrInst &i)
 {
     visitCallSite(&i);
+}
+
+/// raw2fat: the x86-64 va_list type, or null for any other layout.
+static const StructType* getVAListTagType(const Value* list)
+{
+    const PointerType* ptrTy =
+        SVFUtil::dyn_cast<PointerType>(list->stripPointerCasts()->getType());
+    if (!ptrTy || ptrTy->isOpaque())
+        return nullptr;
+    const Type* elemTy = ptrTy->getNonOpaquePointerElementType();
+    if (const ArrayType* arrTy = SVFUtil::dyn_cast<ArrayType>(elemTy))
+        elemTy = arrTy->getElementType();
+    const StructType* tagTy = SVFUtil::dyn_cast<StructType>(elemTy);
+    if (!tagTy || !tagTy->hasName() ||
+            !tagTy->getName().startswith("struct.__va_list_tag"))
+        return nullptr;
+    return tagTy;
+}
+
+/// raw2fat: a node pointing to field \p field of the va_list \p list.
+NodeID SVFIRBuilder::getVAListFieldNode(NodeID list, const StructType* tagTy,
+                                        u32_t field)
+{
+    const SVFType* svfTagTy = LLVMModuleSet::getLLVMModuleSet()->getSVFType(tagTy);
+    u32_t idx = pag->getSymbolInfo()->getFlattenedElemIdx(svfTagTy, field);
+    NodeID fieldNode = pag->addDummyValNode();
+    addNormalGepEdge(list, fieldNode, AccessPath(idx, svfTagTy));
+    return fieldNode;
+}
+
+/// raw2fat: on x86-64, clang expands va_arg into loads through the
+/// overflow_arg_area and reg_save_area fields of the va_list, which
+/// llvm.va_start points at the variadic actuals. visitVAStartInst and
+/// visitVACopyInst were empty, so pointers read through va_arg pointed to
+/// nothing, and a callee pointer that also had another source looked
+/// resolved without the actuals' targets.
+/// Model the argument area as one field-insensitive object holding the
+/// function's vararg node, and let llvm.va_copy copy both fields.
+void SVFIRBuilder::handleVAListIntrinsic(const CallBase* cs)
+{
+    const Function* callee = cs->getCalledFunction();
+    if (!callee)
+        return;
+    llvm::Intrinsic::ID id = callee->getIntrinsicID();
+    if (id != llvm::Intrinsic::vastart && id != llvm::Intrinsic::vacopy)
+        return;
+    const StructType* tagTy = getVAListTagType(cs->getArgOperand(0));
+    if (!tagTy)
+        llvm::report_fatal_error("SVF: unsupported va_list layout in " +
+                                 cs->getFunction()->getName());
+    // { i32 gp_offset, i32 fp_offset, i8* overflow_arg_area, i8* reg_save_area }
+    const u32_t areaFields[] = {2, 3};
+    NodeID dstList = getValueNode(cs->getArgOperand(0));
+    if (id == llvm::Intrinsic::vacopy)
+    {
+        NodeID srcList = getValueNode(cs->getArgOperand(1));
+        for (u32_t field : areaFields)
+        {
+            NodeID area = pag->addDummyValNode();
+            addLoadEdge(getVAListFieldNode(srcList, tagTy, field), area);
+            addStoreEdge(area, getVAListFieldNode(dstList, tagTy, field));
+        }
+        return;
+    }
+    const Function* fun = cs->getFunction();
+    if (!fun->isVarArg())
+        return;
+    NodeID varargs =
+        getVarargNode(LLVMModuleSet::getLLVMModuleSet()->getSVFFunction(fun));
+    NodeID area = pag->addDummyValNode();
+    NodeID areaObj = pag->addDummyObjNode(
+                         LLVMModuleSet::getLLVMModuleSet()->getSVFType(
+                             cs->getArgOperand(0)->getType()));
+    const_cast<MemObj*>(pag->getObject(areaObj))->setFieldInsensitive();
+    addAddrEdge(areaObj, area);
+    addStoreEdge(varargs, area);
+    for (u32_t field : areaFields)
+        addStoreEdge(area, getVAListFieldNode(dstList, tagTy, field));
 }
 
 /*

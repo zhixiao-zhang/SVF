@@ -127,6 +127,9 @@ public:
     void visitInvokeInst(InvokeInst &II);
     void visitCallBrInst(CallBrInst &I);
     void visitCallSite(CallBase* cs);
+    /// raw2fat: model llvm.va_start and llvm.va_copy on an x86-64 va_list.
+    void handleVAListIntrinsic(const CallBase* cs);
+    NodeID getVAListFieldNode(NodeID list, const StructType* tagTy, u32_t field);
     void visitReturnInst(ReturnInst &I);
     void visitCastInst(CastInst &I);
     void visitSelectInst(SelectInst &I);
@@ -153,9 +156,15 @@ public:
     /// TODO: var arguments need to be handled.
     /// https://llvm.org/docs/LangRef.html#id1911
     void visitVAArgInst(VAArgInst&);
-    void visitVACopyInst(VACopyInst&) {}
+    void visitVACopyInst(VACopyInst& I)
+    {
+        handleVAListIntrinsic(&I);
+    }
     void visitVAEndInst(VAEndInst&) {}
-    void visitVAStartInst(VAStartInst&) {}
+    void visitVAStartInst(VAStartInst& I)
+    {
+        handleVAListIntrinsic(&I);
+    }
 
     /// <result> = freeze ty <val>
     /// If <val> is undef or poison, ‘freeze’ returns an arbitrary, but fixed value of type `ty`
