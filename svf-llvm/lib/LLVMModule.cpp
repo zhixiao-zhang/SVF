@@ -1206,6 +1206,16 @@ SVFConstantData* LLVMModuleSet::getSVFConstantData(const ConstantData* cd)
         }
         else if(SVFUtil::isa<ConstantPointerNull>(cd))
             svfcd = new SVFConstantNullPtr(getSVFType(cd->getType()));
+        /// raw2fat: an undef/poison scalar (pointer, integer or floating
+        /// point) has no pointee (dereferencing an undef pointer is undefined
+        /// behaviour), so model it like null. SVF maps it to the black hole
+        /// pointer, which spreads unknown memory from benign optimizer
+        /// artifacts such as unused call arguments and phi inputs on
+        /// unreachable edges; integers reach pointer analysis too (patch
+        /// 0004). Undef aggregates and vectors keep the black hole mapping.
+        else if (SVFUtil::isa<UndefValue>(cd) && cd->getType()->isSingleValueType() &&
+                 !cd->getType()->isVectorTy())
+            svfcd = new SVFConstantNullPtr(getSVFType(cd->getType()));
         else if (SVFUtil::isa<UndefValue>(cd))
             svfcd = new SVFBlackHoleValue(getSVFType(cd->getType()));
         else
