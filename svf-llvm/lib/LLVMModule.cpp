@@ -187,6 +187,10 @@ void LLVMModuleSet::createSVFDataStructure()
     }
 
     /// then traverse candidate sets
+    /// raw2fat: create the SVF values of all modules' globals before setting
+    /// their attributes. setValueAttr links each global to the SVF value of
+    /// its multi-module representative, which may live in a later module.
+    std::vector<std::pair<const GlobalValue*, SVFGlobalValue*>> createdGlobals;
     for (const Module& mod : modules)
     {
         /// GlobalVariable
@@ -195,7 +199,8 @@ void LLVMModuleSet::createSVFDataStructure()
             SVFGlobalValue* svfglobal = new SVFGlobalValue(
                 global.getName().str(), getSVFType(global.getType()));
             svfModule->addGlobalSet(svfglobal);
-            addGlobalValueMap(&global, svfglobal);
+            LLVMConst2SVFConst[&global] = svfglobal;
+            createdGlobals.emplace_back(&global, svfglobal);
         }
 
         /// GlobalAlias
@@ -204,7 +209,8 @@ void LLVMModuleSet::createSVFDataStructure()
             SVFGlobalValue* svfalias = new SVFGlobalValue(
                 alias.getName().str(), getSVFType(alias.getType()));
             svfModule->addAliasSet(svfalias);
-            addGlobalValueMap(&alias, svfalias);
+            LLVMConst2SVFConst[&alias] = svfalias;
+            createdGlobals.emplace_back(&alias, svfalias);
         }
 
         /// GlobalIFunc
@@ -213,9 +219,12 @@ void LLVMModuleSet::createSVFDataStructure()
             SVFGlobalValue* svfifunc = new SVFGlobalValue(
                 ifunc.getName().str(), getSVFType(ifunc.getType()));
             svfModule->addAliasSet(svfifunc);
-            addGlobalValueMap(&ifunc, svfifunc);
+            LLVMConst2SVFConst[&ifunc] = svfifunc;
+            createdGlobals.emplace_back(&ifunc, svfifunc);
         }
     }
+    for (const auto& pair : createdGlobals)
+        setValueAttr(pair.first, pair.second);
 }
 
 void LLVMModuleSet::createSVFFunction(const Function* func)
@@ -1060,7 +1069,11 @@ void LLVMModuleSet::buildFunToFunMap()
 
 void LLVMModuleSet::buildGlobalDefToRepMap()
 {
-    typedef Map<string, Set<GlobalVariable*>> NameToGlobalsMapTy;
+    /// raw2fat: keep module order instead of pointer order so the choice is
+    /// deterministic, and prefer an application definition over an extapi.bc
+    /// one: extapi globals model library state and must not replace a
+    /// variable the program defines itself.
+    typedef Map<string, std::vector<GlobalVariable*>> NameToGlobalsMapTy;
     NameToGlobalsMapTy nameToGlobalsMap;
     for (Module &mod : modules)
     {
@@ -1072,17 +1085,25 @@ void LLVMModuleSet::buildGlobalDefToRepMap()
             string name = global.getName().str();
             if (name.empty())
                 continue;
-            nameToGlobalsMap[std::move(name)].insert(&global);
+            nameToGlobalsMap[std::move(name)].push_back(&global);
         }
     }
 
+    const std::string& extBcPath = ExtAPI::getExtAPI()->getExtBcPath();
     for (const auto& pair : nameToGlobalsMap)
     {
-        const Set<GlobalVariable*> &globals = pair.second;
+        const std::vector<GlobalVariable*> &globals = pair.second;
 
-        const auto repIt =
+        auto repIt =
             std::find_if(globals.begin(), globals.end(),
-                         [](GlobalVariable* g)
+                         [&](GlobalVariable* g)
+        {
+            return g->hasInitializer() &&
+                   g->getParent()->getName().str() != extBcPath;
+        });
+        if (repIt == globals.end())
+            repIt = std::find_if(globals.begin(), globals.end(),
+                                 [](GlobalVariable* g)
         {
             return g->hasInitializer();
         });
