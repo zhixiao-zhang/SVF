@@ -232,6 +232,13 @@ void SVFIRBuilder::initialiseNodes()
     {
         DBOUT(DPAGBuild, outs() << "add address edges for constant node " << iter->second << "\n");
         const SVFValue* val = iter->first;
+        /// raw2fat: integers now carry points-to sets, so an integer or
+        /// floating-point constant must not point to the shared constant
+        /// object; otherwise every pointer derived by arithmetic with a
+        /// constant would alias all constant data.
+        const Type* valTy = LLVMModuleSet::getLLVMModuleSet()->getLLVMValue(val)->getType();
+        if (valTy->isIntOrIntVectorTy() || valTy->isFPOrFPVectorTy())
+            continue;
         if (isConstantObjSym(val))
         {
             NodeID ptr = pag->getValueNode(val);
@@ -395,10 +402,16 @@ void SVFIRBuilder::processCE(const Value* val)
             addSelectStmt(nres,nsrc1, nsrc2, cond);
             setCurrentLocation(cval, cbb);
         }
-        // if we meet a int2ptr, then it points-to black hole
+        /// raw2fat: an int2ptr copies its operand, as visitCastInst does.
         else if (const ConstantExpr* int2Ptrce = isInt2PtrConstantExpr(ref))
         {
-            addGlobalBlackHoleAddrEdge(pag->getValueNode(LLVMModuleSet::getLLVMModuleSet()->getSVFValue(int2Ptrce)), int2Ptrce);
+            const Constant* opnd = int2Ptrce->getOperand(0);
+            processCE(opnd);
+            const SVFBasicBlock* cbb = getCurrentBB();
+            const SVFValue* cval = getCurrentValue();
+            setCurrentLocation(int2Ptrce, nullptr);
+            addCopyEdge(pag->getValueNode(LLVMModuleSet::getLLVMModuleSet()->getSVFValue(opnd)), pag->getValueNode(LLVMModuleSet::getLLVMModuleSet()->getSVFValue(int2Ptrce)));
+            setCurrentLocation(cval, cbb);
         }
         else if (const ConstantExpr* ptr2Intce = isPtr2IntConstantExpr(ref))
         {
@@ -410,19 +423,24 @@ void SVFIRBuilder::processCE(const Value* val)
             addCopyEdge(pag->getValueNode(LLVMModuleSet::getLLVMModuleSet()->getSVFValue(opnd)), pag->getValueNode(LLVMModuleSet::getLLVMModuleSet()->getSVFValue(ptr2Intce)));
             setCurrentLocation(cval, cbb);
         }
-        else if(isTruncConstantExpr(ref) || isCmpConstantExpr(ref))
+        /// raw2fat: integer casts and binary operators copy their operands,
+        /// as their instruction forms do.
+        else if (isTruncConstantExpr(ref) || isBinaryConstantExpr(ref))
         {
-            // we don't handle trunc and cmp instruction for now
-            const SVFValue* cval = getCurrentValue();
+            const ConstantExpr* ce = SVFUtil::cast<ConstantExpr>(ref);
+            for (const Use& op : ce->operands())
+                processCE(op.get());
             const SVFBasicBlock* cbb = getCurrentBB();
+            const SVFValue* cval = getCurrentValue();
             setCurrentLocation(ref, nullptr);
             NodeID dst = pag->getValueNode(LLVMModuleSet::getLLVMModuleSet()->getSVFValue(ref));
-            addBlackHoleAddrEdge(dst);
+            for (const Use& op : ce->operands())
+                addCopyEdge(pag->getValueNode(LLVMModuleSet::getLLVMModuleSet()->getSVFValue(op.get())), dst);
             setCurrentLocation(cval, cbb);
         }
-        else if (isBinaryConstantExpr(ref))
+        else if(isCmpConstantExpr(ref))
         {
-            // we don't handle binary constant expression like add(x,y) now
+            // we don't handle trunc and cmp instruction for now
             const SVFValue* cval = getCurrentValue();
             const SVFBasicBlock* cbb = getCurrentBB();
             setCurrentLocation(ref, nullptr);
@@ -733,19 +751,18 @@ void SVFIRBuilder::visitCastInst(CastInst &inst)
     DBOUT(DPAGBuild, outs() << "process cast  " << LLVMModuleSet::getLLVMModuleSet()->getSVFValue(&inst)->toString() << " \n");
     NodeID dst = getValueNode(&inst);
 
-    if (SVFUtil::isa<IntToPtrInst>(&inst))
-    {
-        addBlackHoleAddrEdge(dst);
-    }
-    else
-    {
-        const Value* opnd = inst.getOperand(0);
-        if (!SVFUtil::isa<PointerType>(opnd->getType()))
-            opnd = stripAllCasts(opnd);
+    /// raw2fat: inttoptr copies its operand like every other cast instead of
+    /// pointing to the black hole. ptrtoint, integer casts, integer loads and
+    /// stores and (see visitBinaryOperator) integer arithmetic already carry
+    /// the points-to set of the pointer an integer was derived from, so a
+    /// pointer that round-trips through an integer keeps its pointees. An
+    /// integer that derives from no pointer gives an empty set.
+    const Value* opnd = inst.getOperand(0);
+    if (!SVFUtil::isa<PointerType>(opnd->getType()))
+        opnd = stripAllCasts(opnd);
 
-        NodeID src = getValueNode(opnd);
-        addCopyEdge(src, dst);
-    }
+    NodeID src = getValueNode(opnd);
+    addCopyEdge(src, dst);
 }
 
 /*!
@@ -761,6 +778,11 @@ void SVFIRBuilder::visitBinaryOperator(BinaryOperator &inst)
     NodeID op2Node = getValueNode(op2);
     u32_t opcode = inst.getOpcode();
     addBinaryOPEdge(op1Node, op2Node, dst, opcode);
+    /// raw2fat: Andersen ignores BinaryOPStmt. Copy both operands so that
+    /// integer arithmetic on a pointer (alignment masks, offsets, unions
+    /// merged into one integer) keeps the pointer's points-to set.
+    addCopyEdge(op1Node, dst);
+    addCopyEdge(op2Node, dst);
 }
 
 /*!

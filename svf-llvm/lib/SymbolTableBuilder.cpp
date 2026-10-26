@@ -436,10 +436,13 @@ void SymbolTableBuilder::handleCE(const Value* val)
             handleCE(ce->getOperand(1));
             handleCE(ce->getOperand(2));
         }
-        // if we meet a int2ptr, then it points-to black hole
+        /// raw2fat: int2ptr, integer casts and binary operators copy their
+        /// operands (SVFIRBuilder::processCE), so their operands need symbols.
         else if (const ConstantExpr* int2Ptrce = isInt2PtrConstantExpr(ref))
         {
             collectVal(int2Ptrce);
+            collectVal(int2Ptrce->getOperand(0));
+            handleCE(int2Ptrce->getOperand(0));
         }
         else if (const ConstantExpr* ptr2Intce = isPtr2IntConstantExpr(ref))
         {
@@ -447,11 +450,16 @@ void SymbolTableBuilder::handleCE(const Value* val)
             const Constant* opnd = ptr2Intce->getOperand(0);
             handleCE(opnd);
         }
-        else if (isTruncConstantExpr(ref) || isCmpConstantExpr(ref))
+        else if (isTruncConstantExpr(ref) || isBinaryConstantExpr(ref))
         {
             collectVal(ref);
+            for (u32_t i = 0; i < ref->getNumOperands(); ++i)
+            {
+                collectVal(ref->getOperand(i));
+                handleCE(ref->getOperand(i));
+            }
         }
-        else if (isBinaryConstantExpr(ref))
+        else if (isCmpConstantExpr(ref))
         {
             collectVal(ref);
         }
@@ -634,11 +642,20 @@ void SymbolTableBuilder::analyzeObjType(ObjTypeInfo* typeinfo, const Value* val)
     // TODO: getPtrElementType need type inference
     Type *elemTy = getPtrElementType(refty);
     bool isPtrObj = false;
+    /// raw2fat: pointer-sized integers may hold pointers (PTR2IV-style code
+    /// stores pointers in integer fields), so they make an object a pointer
+    /// object too; see SVFType::canHoldPointer.
+    const unsigned ptrBits = LLVMUtil::getDataLayout(
+        LLVMModuleSet::getLLVMModuleSet()->getMainLLVMModule())->getPointerSizeInBits();
+    auto canHoldPointer = [ptrBits](const Type* ty)
+    {
+        return ty->isPointerTy() || ty->isIntegerTy(ptrBits);
+    };
     // Find the inter nested array element
     while (const ArrayType* AT = SVFUtil::dyn_cast<ArrayType>(elemTy))
     {
         elemTy = AT->getElementType();
-        if (elemTy->isPointerTy())
+        if (canHoldPointer(elemTy))
             isPtrObj = true;
         if (SVFUtil::isa<GlobalVariable>(val) &&
                 SVFUtil::cast<GlobalVariable>(val)->hasInitializer() &&
@@ -655,7 +672,7 @@ void SymbolTableBuilder::analyzeObjType(ObjTypeInfo* typeinfo, const Value* val)
         isPtrObj |= std::any_of(flattenFields.begin(), flattenFields.end(),
                                 [](const SVFType* ty)
         {
-            return ty->isPointerTy();
+            return ty->canHoldPointer();
         });
         if (SVFUtil::isa<GlobalVariable>(val) &&
                 SVFUtil::cast<GlobalVariable>(val)->hasInitializer() &&
@@ -665,7 +682,7 @@ void SymbolTableBuilder::analyzeObjType(ObjTypeInfo* typeinfo, const Value* val)
         else
             typeinfo->setFlag(ObjTypeInfo::VAR_STRUCT_OBJ);
     }
-    else if (elemTy->isPointerTy())
+    else if (canHoldPointer(elemTy))
     {
         isPtrObj = true;
     }

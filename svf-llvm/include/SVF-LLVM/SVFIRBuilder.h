@@ -284,6 +284,14 @@ protected:
 
     inline void addBlackHoleAddrEdge(NodeID node)
     {
+        /// raw2fat: integers now take part in pointer analysis. SVF gives
+        /// every result it does not model (extractvalue, extractelement,
+        /// atomics, ...) the black hole, which for an integer result (an
+        /// overflow intrinsic's value, a SIMD lane) would spread unknown
+        /// memory through ordinary arithmetic; only pointer results keep it.
+        const SVFType* ty = pag->getGNode(node)->getType();
+        if (ty && SVFUtil::isa<SVFIntegerType>(ty))
+            return;
         if(PAGEdge *edge = pag->addBlackHoleAddrStmt(node))
             setCurrentBBAndValueForPAGEdge(edge);
     }

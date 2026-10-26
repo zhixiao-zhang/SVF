@@ -387,7 +387,8 @@ bool ObjTypeInfo::isNonPtrFieldObj(const APOffset& apOffset)
         }
 
         const SVFType* elemTy = SymbolTableInfo::SymbolInfo()->getFlatternedElemType(ety, apOffset);
-        return (elemTy->isPointerTy() == false);
+        /// raw2fat: pointer-sized integer fields may hold pointers.
+        return (elemTy->canHoldPointer() == false);
     }
     else
     {

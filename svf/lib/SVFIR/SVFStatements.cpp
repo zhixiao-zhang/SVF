@@ -58,9 +58,18 @@ SVFStmt::SVFStmt(SVFVar* s, SVFVar* d, GEdgeFlag k, bool real) :
 /*!
  * Whether src and dst nodes are both pointer type
  */
+/// raw2fat: pointer-sized integers take part in pointer analysis, so that a
+/// pointer converted to an integer (ptrtoint, PTR2IV-style integer fields,
+/// integer arithmetic) keeps its points-to set; see SVFType::canHoldPointer.
+static inline bool canCarryPointer(const SVFVar* node)
+{
+    return node->isPointer() ||
+           (node->getType() && node->getType()->canHoldPointer());
+}
+
 bool SVFStmt::isPTAEdge() const
 {
-    return getSrcNode()->isPointer() && getDstNode()->isPointer();
+    return canCarryPointer(getSrcNode()) && canCarryPointer(getDstNode());
 }
 
 const std::string SVFStmt::toString() const

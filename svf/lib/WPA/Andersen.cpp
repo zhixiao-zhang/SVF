@@ -341,6 +341,14 @@ void Andersen::processAddr(const AddrCGEdge* addr)
         pushIntoWorklist(dst);
 }
 
+/// raw2fat: indirect-call arguments and returns are connected when they can
+/// carry a pointer, including pointer-sized integers (PTR2IV-style code).
+static inline bool canCarryPointer(const PAGNode* node)
+{
+    return node->isPointer() ||
+           (node->getType() && node->getType()->canHoldPointer());
+}
+
 /*!
  * Process load edges
  *	src --load--> dst,
@@ -726,7 +734,7 @@ void Andersen::connectCaller2CalleeParams(CallSite cs, const SVFFunction* F, Nod
     {
         const PAGNode* cs_return = pag->getCallSiteRet(retBlockNode);
         const PAGNode* fun_return = pag->getFunRet(F);
-        if (cs_return->isPointer() && fun_return->isPointer())
+        if (canCarryPointer(cs_return) && canCarryPointer(fun_return))
         {
             NodeID dstrec = sccRepNode(cs_return->getId());
             NodeID srcret = sccRepNode(fun_return->getId());
@@ -762,7 +770,7 @@ void Andersen::connectCaller2CalleeParams(CallSite cs, const SVFFunction* F, Nod
             const PAGNode *cs_arg = *csArgIt ;
             const PAGNode *fun_arg = *funArgIt;
 
-            if (cs_arg->isPointer() && fun_arg->isPointer())
+            if (canCarryPointer(cs_arg) && canCarryPointer(fun_arg))
             {
                 DBOUT(DAndersen, outs() << "process actual parm  " << cs_arg->toString() << " \n");
                 NodeID srcAA = sccRepNode(cs_arg->getId());
@@ -782,7 +790,7 @@ void Andersen::connectCaller2CalleeParams(CallSite cs, const SVFFunction* F, Nod
             for (; csArgIt != csArgEit; ++csArgIt)
             {
                 const PAGNode *cs_arg = *csArgIt;
-                if (cs_arg->isPointer())
+                if (canCarryPointer(cs_arg))
                 {
                     NodeID vnAA = sccRepNode(cs_arg->getId());
                     if (addCopyEdge(vnAA,vaF))

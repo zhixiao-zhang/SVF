@@ -330,6 +330,14 @@ public:
         return kind == SVFPointerTy;
     }
 
+    /// raw2fat: whether a value of this type can carry a pointer: a pointer,
+    /// or an integer as wide as one (the analysis host is the target).
+    inline bool canHoldPointer() const
+    {
+        return kind == SVFPointerTy ||
+               (kind == SVFIntegerTy && byteSize == sizeof(void*));
+    }
+
     inline bool isArrayTy() const
     {
         return kind == SVFArrayTy;
