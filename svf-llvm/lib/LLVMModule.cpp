@@ -1448,6 +1448,14 @@ StInfo* LLVMModuleSet::collectArrayInfo(const ArrayType* ty)
         return stInfo;
     }
 
+    /// raw2fat: without -model-arrays every element index maps to the base
+    /// (SymbolTableInfo::getFlattenedElemIdx), so per-element entries are
+    /// never read. Recording one per element took memory linear in the
+    /// array length, and a u32_t counter never ended for a 4G-element global
+    /// ([4294967296 x i8]); describe the array by a single element instead.
+    if (!Options::ModelArrays())
+        totalElemNum = 1;
+
     /// Array's flatten field infor is the same as its element's
     /// flatten infor.
     StInfo* elemStInfo = collectTypeInfo(elemTy);
@@ -1461,7 +1469,7 @@ StInfo* LLVMModuleSet::collectArrayInfo(const ArrayType* ty)
 
     /// Flatten arrays, map each array element index `i` to flattened index `(i * nfE * totalElemNum)/outArrayElemNum`
     /// nfE>1 if the array element is a struct with more than one field.
-    u32_t outArrayElemNum = ty->getNumElements();
+    u32_t outArrayElemNum = Options::ModelArrays() ? ty->getNumElements() : 1;
     for (u32_t i = 0; i < outArrayElemNum; ++i)
     {
         auto idx = (i * nfE * totalElemNum) / outArrayElemNum;
