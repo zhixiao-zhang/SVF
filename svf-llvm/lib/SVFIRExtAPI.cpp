@@ -133,6 +133,13 @@ void SVFIRBuilder::handleExtCall(const CallBase* cs, const SVFFunction* svfCalle
         NodeID val = pag->getValueNode(svfInst);
         NodeID obj = pag->getObjectNode(svfInst);
         addAddrEdge(obj, val);
+        /// raw2fat: realloc may return its argument's object, or a new one
+        /// holding that object's contents. Let the result also point to
+        /// whatever the old pointer points to, so pointers stored before the
+        /// call are still found through the result.
+        if (isReallocExtFun(svfCallee) && cs->arg_size() > 0 &&
+                cs->getArgOperand(0)->getType()->isPointerTy())
+            addCopyEdge(getValueNode(cs->getArgOperand(0)), val);
     }
     else if (isHeapAllocExtCallViaArg(svfCall))
     {
