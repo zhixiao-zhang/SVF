@@ -237,7 +237,8 @@ void SVFIRBuilder::initialiseNodes()
         /// object; otherwise every pointer derived by arithmetic with a
         /// constant would alias all constant data.
         const Type* valTy = LLVMModuleSet::getLLVMModuleSet()->getLLVMValue(val)->getType();
-        if (valTy->isIntOrIntVectorTy() || valTy->isFPOrFPVectorTy())
+        /// Aggregates (zeroinitializer structs) take part too (patch 0006).
+        if (!valTy->isPointerTy())
             continue;
         if (isConstantObjSym(val))
         {
@@ -460,7 +461,21 @@ void SVFIRBuilder::processCE(const Value* val)
         }
         else if (SVFUtil::isa<ConstantAggregate>(ref))
         {
-            // we don't handle constant aggregate like constant vectors
+            /// raw2fat: a constant struct or array used as a value holds the
+            /// pointers of its elements (patch 0006). Constant vectors are
+            /// still not handled.
+            if (!ref->getType()->isVectorTy())
+            {
+                for (const Use& op : ref->operands())
+                    processCE(op.get());
+                const SVFBasicBlock* cbb = getCurrentBB();
+                const SVFValue* cval = getCurrentValue();
+                setCurrentLocation(ref, nullptr);
+                NodeID dst = pag->getValueNode(LLVMModuleSet::getLLVMModuleSet()->getSVFValue(ref));
+                for (const Use& op : ref->operands())
+                    addCopyEdge(pag->getValueNode(LLVMModuleSet::getLLVMModuleSet()->getSVFValue(op.get())), dst);
+                setCurrentLocation(cval, cbb);
+            }
         }
         else if (SVFUtil::isa<BlockAddress>(ref))
         {
@@ -927,8 +942,10 @@ void SVFIRBuilder::visitReturnInst(ReturnInst &inst)
  */
 void SVFIRBuilder::visitExtractValueInst(ExtractValueInst  &inst)
 {
+    /// raw2fat: copy the aggregate's bag of pointers (see
+    /// visitInsertValueInst) instead of pointing to the black hole.
     NodeID dst = getValueNode(&inst);
-    addBlackHoleAddrEdge(dst);
+    addCopyEdge(getValueNode(inst.getAggregateOperand()), dst);
 }
 
 /*!

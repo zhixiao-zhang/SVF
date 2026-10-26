@@ -1213,8 +1213,9 @@ SVFConstantData* LLVMModuleSet::getSVFConstantData(const ConstantData* cd)
         /// artifacts such as unused call arguments and phi inputs on
         /// unreachable edges; integers reach pointer analysis too (patch
         /// 0004). Undef aggregates and vectors keep the black hole mapping.
-        else if (SVFUtil::isa<UndefValue>(cd) && cd->getType()->isSingleValueType() &&
-                 !cd->getType()->isVectorTy())
+        /// Undef aggregates are null too now that aggregates take part in
+        /// pointer analysis (patch 0006).
+        else if (SVFUtil::isa<UndefValue>(cd) && !cd->getType()->isVectorTy())
             svfcd = new SVFConstantNullPtr(getSVFType(cd->getType()));
         else if (SVFUtil::isa<UndefValue>(cd))
             svfcd = new SVFBlackHoleValue(getSVFType(cd->getType()));

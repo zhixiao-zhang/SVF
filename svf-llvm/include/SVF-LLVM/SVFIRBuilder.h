@@ -133,9 +133,14 @@ public:
     void visitExtractValueInst(ExtractValueInst  &EVI);
     void visitBranchInst(BranchInst &I);
     void visitSwitchInst(SwitchInst &I);
+    /// raw2fat: a first-class aggregate value is modeled as one bag of the
+    /// pointers in its fields, so insertvalue copies the aggregate and the
+    /// inserted element (patch 0006).
     void visitInsertValueInst(InsertValueInst &I)
     {
-        addBlackHoleAddrEdge(getValueNode(&I));
+        NodeID dst = getValueNode(&I);
+        addCopyEdge(getValueNode(I.getAggregateOperand()), dst);
+        addCopyEdge(getValueNode(I.getInsertedValueOperand()), dst);
     }
     // TerminatorInst and UnwindInst have been removed since llvm-8.0.0
     // void visitTerminatorInst(TerminatorInst &TI) {}

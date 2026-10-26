@@ -470,8 +470,15 @@ void SymbolTableBuilder::handleCE(const Value* val)
         }
         else if (SVFUtil::isa<ConstantAggregate>(ref))
         {
-            // we don't handle constant aggregate like constant vectors
+            /// raw2fat: constant structs and arrays copy their elements
+            /// (SVFIRBuilder::processCE), so the elements need symbols.
             collectVal(ref);
+            if (!ref->getType()->isVectorTy())
+                for (u32_t i = 0; i < ref->getNumOperands(); ++i)
+                {
+                    collectVal(ref->getOperand(i));
+                    handleCE(ref->getOperand(i));
+                }
         }
         else
         {

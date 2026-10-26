@@ -331,11 +331,20 @@ public:
     }
 
     /// raw2fat: whether a value of this type can carry a pointer: a pointer,
-    /// or an integer as wide as one (the analysis host is the target).
+    /// an integer as wide as one (the analysis host is the target), or a
+    /// struct or array with such a field (first-class aggregates passed by
+    /// value; patch 0006).
     inline bool canHoldPointer() const
     {
-        return kind == SVFPointerTy ||
-               (kind == SVFIntegerTy && byteSize == sizeof(void*));
+        if (kind == SVFPointerTy)
+            return true;
+        if (kind == SVFIntegerTy)
+            return byteSize == sizeof(void*);
+        if ((kind == SVFStructTy || kind == SVFArrayTy) && typeinfo)
+            for (const SVFType* field : typeinfo->getFlattenFieldTypes())
+                if (field != this && field->canHoldPointer())
+                    return true;
+        return false;
     }
 
     inline bool isArrayTy() const
